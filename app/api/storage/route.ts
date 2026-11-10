@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin, isErrorResponse } from '@/lib/apiAuth';
 
+interface BucketOptionsInput {
+  public: boolean;
+  file_size_limit?: number | string;
+  allowed_mime_types?: string[];
+}
+
 export async function GET(request: NextRequest) {
   const ctx = await requireAdmin(request);
   if (isErrorResponse(ctx)) return ctx;
@@ -70,7 +76,7 @@ export async function POST(request: NextRequest) {
 
     // Create bucket with configuration
     if (action === 'createBucket') {
-      const options: any = {
+      const options: BucketOptionsInput = {
         public: isPublic ?? true,
       };
 
@@ -92,7 +98,7 @@ export async function POST(request: NextRequest) {
 
     // Update bucket configuration
     if (action === 'updateBucket') {
-      const options: any = {
+      const options: BucketOptionsInput = {
         public: isPublic,
       };
 
