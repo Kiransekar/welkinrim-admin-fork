@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import type { Product, SupabaseProduct, PerfRow, SpecItem } from '@/lib/products';
+import type { Product, SupabaseProduct, PerfRow, SpecItem, ProductCategory } from '@/lib/products';
+import { getCategoryFromSeries } from '@/lib/products';
 import { supabase } from '@/lib/supabaseClient';
 
 interface ProductRow {
@@ -15,6 +16,14 @@ interface ProductRow {
   is_deleted: boolean;
   deleted_at: string | null;
   is_published: boolean;
+}
+
+const CATEGORY_VALUES: ProductCategory[] = ['motor', 'esc', 'fc', 'ips', 'other'];
+
+// An explicit category chosen in the form wins; otherwise derive it from the series id.
+function resolveCategory(product: { series: string; category?: ProductCategory }): ProductCategory {
+  if (product.category && CATEGORY_VALUES.includes(product.category)) return product.category;
+  return getCategoryFromSeries(product.series);
 }
 
 export function useProducts() {
@@ -68,17 +77,23 @@ export function useProducts() {
   }, [products]);
 
   const create = useCallback(async (product: Product, isDraft = false): Promise<boolean> => {
-    // Determine category from series
-    const category = getCategoryFromSeries(product.series);
+    const category = resolveCategory(product);
 
-    const { error } = await supabase.from('products').insert({
+    const insertRow = (cat: string) => supabase.from('products').insert({
       id: product.id,
-      category,
+      category: cat,
       series: product.series,
       model: product.model,
-      data: product,
+      data: { ...product, category: cat },
       is_published: !isDraft, // Draft if isDraft=true, otherwise published
+      is_deleted: false,
     });
+
+    let { error } = await insertRow(category);
+    // 23514 = check_violation: the DB only allows some category values; fall back to 'motor'
+    if (error?.code === '23514' && category !== 'motor') {
+      ({ error } = await insertRow('motor'));
+    }
 
     if (error) {
       console.error('Error creating product', error);
@@ -95,17 +110,22 @@ export function useProducts() {
 
     // Merge updates with existing data
     const merged = { ...existing, ...updates } as Product;
-    const category = getCategoryFromSeries(merged.series);
+    const category = resolveCategory(merged);
 
-    const { error } = await supabase
+    const updateRow = (cat: string) => supabase
       .from('products')
       .update({
-        category,
+        category: cat,
         series: merged.series,
         model: merged.model,
-        data: merged,
+        data: { ...merged, category: cat },
       })
       .eq('id', id);
+
+    let { error } = await updateRow(category);
+    if (error?.code === '23514' && category !== 'motor') {
+      ({ error } = await updateRow('motor'));
+    }
 
     if (error) {
       console.error('Error updating product', error);
@@ -248,13 +268,4 @@ export function useProducts() {
     getDeleted,
     refresh,
   };
-}
-
-// Helper to determine category from series
-function getCategoryFromSeries(series: string): string {
-  if (series === 'haemng' || series === 'maelard' || series === 'stroke' || series === 'vagans' || series === 'sciatic') return 'motor';
-  if (series === 'esc') return 'esc';
-  if (series === 'fc') return 'fc';
-  if (series === 'ips') return 'ips';
-  return 'other';
 }

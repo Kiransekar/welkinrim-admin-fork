@@ -5,7 +5,12 @@ import { useProductActions } from '@/hooks/useProductActions';
 import { useSeries } from '@/hooks/useSeries';
 import { uploadProductThumbnail, uploadProductIcon, uploadProductWireframe } from '@/lib/imageUpload';
 import type { Product, PerfRow, SpecItem, ProductSeries } from '@/lib/products';
-import { createEmptyProduct, getSeriesLabel, getDefaultTag } from '@/lib/products';
+import { createEmptyProduct, getSeriesLabel, getDefaultTag, getCategoryFromSeries, getDefaultSegments, getSegments, SEGMENT_OPTIONS } from '@/lib/products';
+import type { ProductCategory } from '@/lib/products';
+
+// Segments as shown in the form: an explicit (possibly empty) array wins over the fallback
+const formSegments = (p: { series: string; segments?: string[] }): string[] =>
+  Array.isArray(p.segments) ? p.segments : getSegments(p);
 
 interface ProductFormModalProps {
   product: Product | null;
@@ -17,7 +22,7 @@ export function ProductFormModal({ product, onClose }: ProductFormModalProps) {
   const { series: seriesList } = useSeries();
 
   const [formData, setFormData] = useState<Product>(
-    product ?? createEmptyProduct('haemng')
+    product ?? { ...createEmptyProduct('haemng'), category: getCategoryFromSeries('haemng') }
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
@@ -35,13 +40,21 @@ export function ProductFormModal({ product, onClose }: ProductFormModalProps) {
   // Initialize form when editing existing product
   useEffect(() => {
     if (product) {
-      setFormData(product);
+      setFormData({
+        ...product,
+        category: product.category ?? getCategoryFromSeries(product.series),
+        segments: getSegments(product),
+      });
       if (product.thumbnailUrl) setThumbnailPreview(product.thumbnailUrl);
       if (product.iconUrl) setIconPreview(product.iconUrl);
       if (product.wireframeUrl) setWireframePreview(product.wireframeUrl);
     } else {
-      const defaultSeries = seriesList[0]?.id || 'haemng';
-      setFormData(createEmptyProduct(defaultSeries as ProductSeries));
+      // Only pick the default series while the form is still pristine (series list may load late)
+      setFormData(prev => {
+        const defaultSeries = seriesList[0]?.id || 'haemng';
+        if (prev.id || prev.model) return prev;
+        return { ...createEmptyProduct(defaultSeries), category: getCategoryFromSeries(defaultSeries) };
+      });
     }
   }, [product, seriesList]);
 
@@ -62,13 +75,33 @@ export function ProductFormModal({ product, onClose }: ProductFormModalProps) {
   // Series change - update related fields
   const handleSeriesChange = useCallback((series: ProductSeries) => {
     const selectedSeries = seriesList.find(s => s.id === series);
-    setFormData(prev => ({
-      ...prev,
-      series,
-      seriesLabel: selectedSeries?.label || getSeriesLabel(series),
-      tag: getDefaultTag(series),
-    }));
+    setFormData(prev => {
+      // Keep the user's segment choice unless it is still the default of the old series
+      const prevSegs = formSegments(prev);
+      const isDefault = prevSegs.join() === getDefaultSegments(prev.series).join();
+      return {
+        ...prev,
+        series,
+        seriesLabel: selectedSeries?.label || getSeriesLabel(series),
+        tag: getDefaultTag(selectedSeries?.id ?? series),
+        category: getCategoryFromSeries(series),
+        segments: isDefault ? getDefaultSegments(series) : prevSegs,
+      };
+    });
   }, [seriesList]);
+
+  const toggleSegment = useCallback((segmentId: string) => {
+    setFormData(prev => {
+      const current = formSegments(prev);
+      const next = current.includes(segmentId)
+        ? current.filter(x => x !== segmentId)
+        : [...current, segmentId];
+      // keep canonical order
+      const ordered = SEGMENT_OPTIONS.map(o => o.id as string).filter(x => next.includes(x));
+      return { ...prev, segments: ordered };
+    });
+    setErrors(prev => { const n = { ...prev }; delete n.segments; return n; });
+  }, []);
 
   // Handle thumbnail file selection
   const handleThumbnailSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -196,6 +229,10 @@ export function ProductFormModal({ product, onClose }: ProductFormModalProps) {
     if (!formData.model?.trim()) newErrors.model = 'Model name is required';
     if (!formData.id?.trim()) newErrors.id = 'Product ID is required';
 
+    if (formSegments(formData).length === 0) {
+      newErrors.segments = 'Select at least one segment';
+    }
+
     // Validate keySpecs have values
     const emptyKeySpecs = formData.keySpecs?.filter(s => !s.value?.trim() && s.label?.trim());
     if (emptyKeySpecs?.length > 0) {
@@ -267,6 +304,7 @@ export function ProductFormModal({ product, onClose }: ProductFormModalProps) {
       const finalData: Product = {
         ...formData,
         id: productId,
+        segments: formSegments(formData),
         thumbnailUrl,
         iconUrl,
         wireframeUrl,
@@ -375,6 +413,39 @@ export function ProductFormModal({ product, onClose }: ProductFormModalProps) {
                       <option key={s.id} value={s.id}>{s.label}</option>
                     ))}
                   </select>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="category" className="label">Category</label>
+                  <select
+                    id="category"
+                    className="select"
+                    value={formData.category ?? getCategoryFromSeries(formData.series)}
+                    onChange={e => handleChange('category', e.target.value as ProductCategory)}
+                  >
+                    <option value="motor">Motor</option>
+                    <option value="esc">ESC</option>
+                    <option value="fc">Flight Controller</option>
+                    <option value="ips">IPS</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="label">Segments</label>
+                  <div role="group" aria-label="Segments" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px' }}>
+                    {SEGMENT_OPTIONS.map(opt => (
+                      <label key={opt.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={formSegments(formData).includes(opt.id)}
+                          onChange={() => toggleSegment(opt.id)}
+                        />
+                        <span>{opt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {errors.segments && <div className="field-error">{errors.segments}</div>}
                 </div>
 
                 <div className="form-group">

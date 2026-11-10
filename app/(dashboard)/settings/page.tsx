@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useProducts } from '@/hooks/useProducts';
 import { useSeries } from '@/hooks/useSeries';
 import { supabase } from '@/lib/supabaseClient';
+import { authFetch } from '@/lib/apiFetch';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 interface UserProfile {
@@ -123,7 +124,7 @@ export default function SettingsPage() {
 
   const loadAdminUsers = async () => {
     setLoadingAdmins(true);
-    const response = await fetch('/api/admin?action=listAdminUsers', {
+    const response = await authFetch('/api/admin?action=listAdminUsers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'listAdminUsers' }),
@@ -173,7 +174,7 @@ export default function SettingsPage() {
 
     setInvitingUser(true);
 
-    const response = await fetch('/api/admin', {
+    const response = await authFetch('/api/admin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -207,7 +208,7 @@ export default function SettingsPage() {
   const handleRemoveAdmin = async () => {
     if (!adminToRemove) return;
 
-    const response = await fetch('/api/admin', {
+    const response = await authFetch('/api/admin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -229,7 +230,7 @@ export default function SettingsPage() {
   };
 
   const handleResendInvite = async (admin: AdminUser) => {
-    const response = await fetch('/api/admin', {
+    const response = await authFetch('/api/admin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

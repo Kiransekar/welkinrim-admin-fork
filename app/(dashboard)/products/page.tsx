@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useProducts } from '@/hooks/useProducts';
+import { useSeries } from '@/hooks/useSeries';
 import { ProductTable } from '@/components/products/ProductTable';
 import { ProductFilters } from '@/components/products/ProductFilters';
 import { ProductFormModal } from '@/components/products/ProductFormModal';
@@ -13,12 +14,13 @@ import type { Product, SupabaseProduct, ProductSeries } from '@/lib/products';
 import { createEmptyProduct } from '@/lib/products';
 import { useToast } from '@/context/ToastContext';
 
-type CategoryFilter = 'all' | 'haemng' | 'maelard' | 'stroke' | 'vagans' | 'sciatic' | 'esc' | 'fc' | 'ips' | 'other';
+type CategoryFilter = string; // 'all' or a series id
 type SortKey = 'model' | 'series' | 'category' | 'weight';
 type SortDir = 'asc' | 'desc';
 
 export default function ProductsPage() {
-  const { products, loading, remove, create, update, publish, unpublish } = useProducts();
+  const { products, loading, remove, create, update, publish, unpublish, refresh } = useProducts();
+  const { series: seriesList } = useSeries();
   const toast = useToast();
 
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
@@ -38,17 +40,9 @@ export default function ProductsPage() {
   const filteredProducts = useMemo(() => {
     let result = [...products];
 
-    // Category filter
+    // Series filter
     if (activeCategory !== 'all') {
-      // Motors: filter by category and series
-      if (activeCategory === 'haemng') {
-        result = result.filter(p => p.series === 'haemng');
-      } else if (activeCategory === 'maelard') {
-        result = result.filter(p => p.series === 'maelard');
-      } else {
-        // All other series: filter by series
-        result = result.filter(p => p.series === activeCategory);
-      }
+      result = result.filter(p => p.series === activeCategory);
     }
 
     // Search filter
@@ -210,15 +204,16 @@ export default function ProductsPage() {
     }
   };
 
-  const haemngCount = products.filter(p => p.category === 'motor' && p.series === 'haemng').length;
-  const maelardCount = products.filter(p => p.category === 'motor' && p.series === 'maelard').length;
-  const strokeCount = products.filter(p => p.series === 'stroke').length;
-  const vagansCount = products.filter(p => p.series === 'vagans').length;
-  const sciaticCount = products.filter(p => p.series === 'sciatic').length;
-  const escsCount = products.filter(p => p.category === 'esc' || p.series === 'esc').length;
-  const fcsCount = products.filter(p => p.category === 'fc' || p.series === 'fc').length;
-  const ipsCount = products.filter(p => p.category === 'ips' || p.series === 'ips').length;
-  const otherCount = products.filter(p => p.series === 'other').length;
+  // Filter tabs come from the live series table, plus any series ids used by products but not listed
+  const filterTabs = useMemo(() => {
+    const counts = new Map<string, number>();
+    products.forEach(p => counts.set(p.series, (counts.get(p.series) || 0) + 1));
+    const tabs = seriesList.map(s => ({ id: s.id, label: s.label, count: counts.get(s.id) || 0 }));
+    counts.forEach((count, id) => {
+      if (!seriesList.some(s => s.id === id)) tabs.push({ id, label: id, count });
+    });
+    return tabs;
+  }, [products, seriesList]);
 
   return (
     <div className="products-page">
@@ -241,21 +236,11 @@ export default function ProductsPage() {
 
       <ProductFilters
         activeCategory={activeCategory}
-        onCategoryChange={(cat) => setActiveCategory(cat as CategoryFilter)}
+        onCategoryChange={(cat) => setActiveCategory(cat)}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        stats={{
-          all: products.length,
-          haemng: haemngCount,
-          maelard: maelardCount,
-          stroke: strokeCount,
-          vagans: vagansCount,
-          sciatic: sciaticCount,
-          esc: escsCount,
-          fc: fcsCount,
-          ips: ipsCount,
-          other: otherCount,
-        }}
+        tabs={filterTabs}
+        total={products.length}
       />
 
       {loading ? (
@@ -285,7 +270,7 @@ export default function ProductsPage() {
       {isFormOpen && (
         <ProductFormModal
           product={editingProduct}
-          onClose={() => setIsFormOpen(false)}
+          onClose={() => { setIsFormOpen(false); refresh(); }}
         />
       )}
 

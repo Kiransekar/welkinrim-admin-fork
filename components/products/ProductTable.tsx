@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Product, SupabaseProduct, getProductDomain, ProductSeries, getWeight } from '@/lib/products';
+import { Product, SupabaseProduct, getProductDomain, ProductSeries, getWeight, getSegments, SEGMENT_OPTIONS } from '@/lib/products';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 interface ProductTableProps {
@@ -166,6 +166,7 @@ export function ProductTable({
               <th onClick={() => onSort('category')}>
                 Category {getSortIcon(sortKey, 'category', sortDir)}
               </th>
+              <th>Segments</th>
               <th>Status</th>
               <th onClick={() => onSort('weight')}>
                 Weight {getSortIcon(sortKey, 'weight', sortDir)}
@@ -215,6 +216,9 @@ export function ProductTable({
                   </td>
                   <td>
                     <DomainBadge domain={domain} />
+                  </td>
+                  <td>
+                    {getSegments(product).map(id => SEGMENT_OPTIONS.find(o => o.id === id)?.label ?? id).join(', ')}
                   </td>
                   <td>
                     <StatusBadge isPublished={product.is_published} />

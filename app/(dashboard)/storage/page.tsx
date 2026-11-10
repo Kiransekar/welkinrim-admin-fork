@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { authFetch } from '@/lib/apiFetch';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
@@ -56,7 +57,7 @@ export default function StoragePage() {
 
   const loadBuckets = async () => {
     setLoadingBuckets(true);
-    const response = await fetch('/api/storage?action=listBuckets');
+    const response = await authFetch('/api/storage?action=listBuckets');
     const data = await response.json();
 
     if (data.error) {
@@ -121,7 +122,7 @@ export default function StoragePage() {
   const handleDeleteFile = async () => {
     if (!activeBucket || !showDeleteFileConfirm) return;
 
-    const response = await fetch('/api/storage', {
+    const response = await authFetch('/api/storage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -144,7 +145,7 @@ export default function StoragePage() {
   const handleBulkDeleteFiles = async () => {
     if (!activeBucket || selectedFiles.length === 0) return;
 
-    const response = await fetch('/api/storage', {
+    const response = await authFetch('/api/storage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -205,7 +206,7 @@ export default function StoragePage() {
       allowedMimeTypes: mimeTypes,
     };
 
-    const response = await fetch('/api/storage', {
+    const response = await authFetch('/api/storage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -225,7 +226,7 @@ export default function StoragePage() {
   const handleDeleteBucket = async () => {
     if (!showDeleteBucketConfirm) return;
 
-    const response = await fetch('/api/storage', {
+    const response = await authFetch('/api/storage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -249,7 +250,7 @@ export default function StoragePage() {
   const handleEmptyBucket = async () => {
     if (!activeBucket) return;
 
-    const response = await fetch('/api/storage', {
+    const response = await authFetch('/api/storage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

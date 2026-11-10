@@ -2,13 +2,19 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 const publicPaths = ['/login'];
+// Reachable with or without a session (invite / password-set landing page)
+const openPaths = ['/set-password'];
 const apiPaths = ['/api'];
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Skip middleware for API routes and static files
   if (apiPaths.some(path => pathname.startsWith(path))) {
+    return NextResponse.next();
+  }
+
+  if (openPaths.some(path => pathname === path || pathname.startsWith(path + '/'))) {
     return NextResponse.next();
   }
 

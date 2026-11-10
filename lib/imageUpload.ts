@@ -257,40 +257,24 @@ export async function uploadProductWireframe(
     url: result.publicUrl,
   };
 }
+
+/**
+ * Upload a series icon (png/jpg/webp/svg, max 1MB) and return its public URL.
+ * Stored in the existing 'product-icons' bucket under series/.
+ */
 export async function uploadSeriesIcon(
   file: File,
   seriesId: string
 ): Promise<{ success: boolean; url?: string; error?: string }> {
-  // Validate series icon (256x256 min, near-square 0.9-1.1, 512KB max)
-  const validation = await validateImage(file, {
-    minWidth: 256,
-    minHeight: 256,
-    minAspectRatio: 0.9,
-    maxAspectRatio: 1.1,
-    maxSizeBytes: 512 * 1024, // 512KB
-  });
-
-  if (!validation.valid) {
-    return {
-      success: false,
-      error: validation.error,
-    };
+  if (!file.type.startsWith('image/')) {
+    return { success: false, error: 'Icon must be an image file' };
   }
-
-  // Upload to storage
-  const ext = file.name.split('.').pop() || 'png';
-  const path = `${seriesId}.${ext}`;
-  const result = await uploadToStorage(file, 'product-icons', path);
-
-  if (!result.success) {
-    return {
-      success: false,
-      error: result.error,
-    };
+  if (file.size > 1024 * 1024) {
+    return { success: false, error: 'Icon must be 1MB or smaller' };
   }
-
-  return {
-    success: true,
-    url: result.publicUrl,
-  };
+  const ext = (file.name.split('.').pop() || 'png').toLowerCase();
+  const safeId = seriesId.replace(/[^a-z0-9-]/gi, '-');
+  const result = await uploadToStorage(file, 'product-icons', `series/${safeId}-${Date.now()}.${ext}`);
+  if (!result.success) return { success: false, error: result.error };
+  return { success: true, url: result.publicUrl };
 }
