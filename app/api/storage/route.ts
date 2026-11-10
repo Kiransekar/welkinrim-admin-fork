@@ -1,18 +1,11 @@
-import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
-
-// Create Supabase client with service role key for admin operations
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const serviceRoleKey = process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY!;
-
-const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+import { requireAdmin, isErrorResponse } from '@/lib/apiAuth';
 
 export async function GET(request: NextRequest) {
+  const ctx = await requireAdmin(request);
+  if (isErrorResponse(ctx)) return ctx;
+  const supabaseAdmin = ctx.admin;
+
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
   const bucket = searchParams.get('bucket');
@@ -67,6 +60,10 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const ctx = await requireAdmin(request);
+  if (isErrorResponse(ctx)) return ctx;
+  const supabaseAdmin = ctx.admin;
+
   try {
     const body = await request.json();
     const { action, bucket, fileName, fileNames, isPublic, fileSizeLimit, allowedMimeTypes } = body;
