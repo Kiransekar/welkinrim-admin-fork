@@ -3,8 +3,10 @@ import { requireAdmin, isErrorResponse } from '@/lib/apiAuth';
 
 interface BucketOptionsInput {
   public: boolean;
-  file_size_limit?: number | string;
-  allowed_mime_types?: string[];
+  // supabase-js expects camelCase here and maps it to file_size_limit /
+  // allowed_mime_types itself; snake_case keys were silently ignored.
+  fileSizeLimit?: number | string | null;
+  allowedMimeTypes?: string[] | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -81,11 +83,11 @@ export async function POST(request: NextRequest) {
       };
 
       if (fileSizeLimit) {
-        options.file_size_limit = fileSizeLimit;
+        options.fileSizeLimit = fileSizeLimit;
       }
 
       if (allowedMimeTypes && Array.isArray(allowedMimeTypes)) {
-        options.allowed_mime_types = allowedMimeTypes;
+        options.allowedMimeTypes = allowedMimeTypes;
       }
 
       const { data, error } = await supabaseAdmin.storage.createBucket(bucket, options);
@@ -103,11 +105,11 @@ export async function POST(request: NextRequest) {
       };
 
       if (fileSizeLimit !== undefined) {
-        options.file_size_limit = fileSizeLimit;
+        options.fileSizeLimit = fileSizeLimit;
       }
 
       if (allowedMimeTypes && Array.isArray(allowedMimeTypes)) {
-        options.allowed_mime_types = allowedMimeTypes;
+        options.allowedMimeTypes = allowedMimeTypes;
       }
 
       const { data, error } = await supabaseAdmin.storage.updateBucket(bucket, options);
