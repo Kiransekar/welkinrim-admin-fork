@@ -21,8 +21,44 @@ export type SpecItem = {
 };
 
 // Product category types
-export type ProductSeries = 'haemng' | 'maelard' | 'esc' | 'fc' | 'ips' | 'stroke' | 'vagans' | 'sciatic' | 'other';
+// Series ids come from the live `series` table (any id may exist), so this is a plain string.
+export type ProductSeries = string;
 export type ProductCategory = 'motor' | 'esc' | 'fc' | 'ips' | 'other';
+
+// Public-site mega-menu segments. Stored as `data.segments: string[]` (lowercase ids).
+export const SEGMENT_OPTIONS = [
+  { id: 'uav', label: 'UAV' },
+  { id: 'marine', label: 'Marine' },
+  { id: 'land', label: 'Land' },
+  { id: 'robotics', label: 'Robotics' },
+  { id: 'other', label: 'Other' },
+] as const;
+export type ProductSegment = (typeof SEGMENT_OPTIONS)[number]['id'];
+
+// Contract with the public site: missing segments -> ['other'] for series 'other', else ['uav'].
+export function getDefaultSegments(series: string): string[] {
+  return series === 'other' ? ['other'] : ['uav'];
+}
+
+export function getSegments(product: { series: string; segments?: unknown }): string[] {
+  const valid = SEGMENT_OPTIONS.map(o => o.id as string);
+  if (Array.isArray(product.segments)) {
+    const segs = product.segments.filter((x): x is string => typeof x === 'string' && valid.includes(x));
+    if (segs.length > 0) return segs;
+  }
+  return getDefaultSegments(product.series);
+}
+
+// Derive the products.category column (motor|esc|fc|ips|other) from a series id.
+export function getCategoryFromSeries(series: string): ProductCategory {
+  const id = (series || '').toLowerCase();
+  if (['haemng', 'maelard', 'stroke', 'vagans', 'sciatic'].includes(id)) return 'motor';
+  if (id === 'esc' || id.startsWith('esc-') || id.startsWith('esc_')) return 'esc';
+  if (id === 'fc' || id.startsWith('fc-') || id.startsWith('fc_')) return 'fc';
+  if (id === 'ips' || id.startsWith('ips-') || id.startsWith('ips_')) return 'ips';
+  if (id === 'other') return 'other';
+  return 'motor';
+}
 
 // Unified Product type - matches client format exactly
 export interface Product {
@@ -40,6 +76,8 @@ export interface Product {
   iconUrl?: string | null;
   wireframeUrl?: string | null;
   thumbnailBgColor?: string | null;
+  segments?: string[];       // public-site segments (uav|marine|land|robotics|other)
+  category?: ProductCategory;
 }
 
 // Supabase row type (database storage format)
@@ -96,7 +134,7 @@ export function isIPS(product: Product): boolean {
 
 // Get series label from series id
 export function getSeriesLabel(series: ProductSeries): string {
-  const labels: Record<ProductSeries, string> = {
+  const labels: Record<string, string> = {
     haemng: 'Haemng Series',
     maelard: 'Maelard Series',
     esc: 'ESCs',
@@ -107,12 +145,12 @@ export function getSeriesLabel(series: ProductSeries): string {
     sciatic: 'Sciatic Series',
     other: 'Other Systems & Custom Solutions',
   };
-  return labels[series] || 'Unknown Series';
+  return labels[series] || series || 'Unknown Series';
 }
 
 // Get default tag from series
 export function getDefaultTag(series: ProductSeries): string {
-  const tags: Record<ProductSeries, string> = {
+  const tags: Record<string, string> = {
     haemng: 'HAEMNG',
     maelard: 'MAELARD',
     esc: 'ESC',
@@ -123,7 +161,7 @@ export function getDefaultTag(series: ProductSeries): string {
     sciatic: 'SCIATIC',
     other: 'CUSTOM',
   };
-  return tags[series] || 'PRODUCT';
+  return tags[series] || (series ? series.toUpperCase() : 'PRODUCT');
 }
 
 // Create empty product with defaults
@@ -147,6 +185,7 @@ export function createEmptyProduct(series: ProductSeries): Product {
     iconUrl: null,
     wireframeUrl: null,
     thumbnailBgColor: '#111111',
+    segments: getDefaultSegments(series),
   };
 }
 

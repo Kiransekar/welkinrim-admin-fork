@@ -1,191 +1,157 @@
-import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAdmin, isErrorResponse } from '@/lib/apiAuth';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const serviceRoleKey = process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY!;
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://welkinrim-admin.vercel.app';
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'https://welkinrim-admin.vercel.app').replace(/\/+$/, '');
+// Invitees land here with a Supabase session in the URL hash and set their password.
+const INVITE_REDIRECT = `${siteUrl}/set-password`;
 
 // Invite expiration: 24 hours
 const INVITE_EXPIRATION_HOURS = 24;
+const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
-const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+function inviteExpiry() {
+  return new Date(Date.now() + INVITE_EXPIRATION_HOURS * 60 * 60 * 1000).toISOString();
+}
 
-// Helper to check and update expired invites
-async function checkExpiredInvites() {
-  const { error } = await supabaseAdmin
-    .from('user_profiles')
-    .update({ status: 'expired' })
-    .eq('status', 'pending')
-    .lt('invite_expires_at', new Date().toISOString());
+async function listAllAuthUsers(admin: SupabaseClient): Promise<{ users: User[]; error?: string }> {
+  const users: User[] = [];
+  for (let page = 1; page <= 50; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) return { users, error: error.message };
+    users.push(...data.users);
+    if (data.users.length < 200) break;
+  }
+  return { users };
+}
 
-  if (error) console.error('Error checking expired invites:', error);
+function failure(error: { message: string; status?: number } | string, fallbackStatus = 500) {
+  const message = typeof error === 'string' ? error : error.message;
+  const status = typeof error === 'string' ? fallbackStatus : error.status === 429 ? 429 : fallbackStatus;
+  const hint = status === 429 ? ' (email rate limit reached - the Supabase built-in mailer only sends a few emails per hour; configure custom SMTP)' : '';
+  return NextResponse.json({ error: `Invitation email could not be sent: ${message}${hint}` }, { status });
+}
+
+/**
+ * Sends a real invitation email via inviteUserByEmail and (re)creates the pending profile.
+ * If the address already has a never-confirmed auth user, that user (and its profile) is
+ * deleted first so the invite can be sent again - inviteUserByEmail rejects existing users.
+ * Returns null on success or a NextResponse describing the failure.
+ */
+async function sendInvite(
+  admin: SupabaseClient,
+  opts: { email: string; fullName: string; invitedBy: string; unconfirmedUserId?: string }
+): Promise<NextResponse | null> {
+  const { email, fullName, invitedBy, unconfirmedUserId } = opts;
+
+  if (unconfirmedUserId) {
+    await admin.from('user_profiles').delete().eq('id', unconfirmedUserId);
+    const { error: delError } = await admin.auth.admin.deleteUser(unconfirmedUserId);
+    if (delError) return failure(delError);
+  }
+
+  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
+    redirectTo: INVITE_REDIRECT,
+    data: { full_name: fullName, invited_by: invitedBy },
+  });
+  if (error || !data?.user) {
+    return failure(error ?? 'No user returned by Supabase');
+  }
+
+  // upsert: a DB trigger on auth.users may already have created a profile row
+  const { error: profileError } = await admin.from('user_profiles').upsert(
+    {
+      id: data.user.id,
+      email,
+      full_name: fullName,
+      role: 'admin',
+      is_super_admin: false,
+      invited_by: invitedBy,
+      invited_at: new Date().toISOString(),
+      invite_expires_at: inviteExpiry(),
+      status: 'pending',
+    },
+    { onConflict: 'id' }
+  );
+  if (profileError) {
+    // The email already went out, but without a profile the invitee could not use it. Roll back.
+    await admin.auth.admin.deleteUser(data.user.id);
+    return NextResponse.json({ error: profileError.message }, { status: 500 });
+  }
+  return null;
 }
 
 export async function POST(request: NextRequest) {
+  const ctx = await requireAdmin(request, { superAdminOnly: true });
+  if (isErrorResponse(ctx)) return ctx;
+  const { admin: supabaseAdmin, user: caller } = ctx;
+
   try {
     const body = await request.json();
-    const { action, email, fullName, invitedBy, userId } = body;
+    const { action, fullName, userId } = body;
+    const email: string | undefined = typeof body.email === 'string' ? body.email.trim().toLowerCase() : undefined;
 
-    // Always check for expired invites on any request
-    await checkExpiredInvites();
+    // Mark stale pending invites as expired
+    const { error: expireError } = await supabaseAdmin
+      .from('user_profiles')
+      .update({ status: 'expired' })
+      .eq('status', 'pending')
+      .lt('invite_expires_at', new Date().toISOString());
+    if (expireError) console.error('Error checking expired invites:', expireError);
 
     if (action === 'inviteUser') {
-      if (!email || !email.includes('@')) {
+      if (!email || !EMAIL_REGEX.test(email)) {
         return NextResponse.json({ error: 'Valid email required' }, { status: 400 });
       }
+      const name = (typeof fullName === 'string' && fullName.trim()) || email.split('@')[0];
 
-      // Security: Validate email format more strictly
-      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-      if (!emailRegex.test(email)) {
-        return NextResponse.json({ error: 'Invalid email format' }, { status: 400 });
-      }
-
-      // Check if user already exists in auth
-      const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
-      const existing = existingUsers?.users?.find(u => u.email === email);
+      const { users, error: listError } = await listAllAuthUsers(supabaseAdmin);
+      if (listError) return NextResponse.json({ error: listError }, { status: 500 });
+      const existing = users.find(u => u.email?.toLowerCase() === email);
 
       if (existing) {
-        // Check if they already have a profile
         const { data: existingProfile } = await supabaseAdmin
           .from('user_profiles')
           .select('id, status')
           .eq('id', existing.id)
-          .single();
+          .maybeSingle();
 
-        if (existingProfile && existingProfile.status !== 'expired') {
-          return NextResponse.json({ error: 'A user with this email already exists' }, { status: 400 });
-        }
-
-        // If expired, allow resend
-        if (existingProfile?.status === 'expired') {
-          // Send magic link
-          const { error: magicLinkError } = await supabaseAdmin.auth.admin.generateLink({
-            type: 'magiclink',
-            email: email,
-          });
-
-          if (magicLinkError) {
-            return NextResponse.json({ error: magicLinkError.message }, { status: 500 });
+        if (existing.email_confirmed_at) {
+          // Already a real account.
+          if (existingProfile && existingProfile.status !== 'expired') {
+            return NextResponse.json({ error: 'A user with this email already exists' }, { status: 400 });
           }
-
-          // Update profile with new expiration
-          const expiresAt = new Date(Date.now() + INVITE_EXPIRATION_HOURS * 60 * 60 * 1000);
-          await supabaseAdmin
-            .from('user_profiles')
-            .update({
-              status: 'pending',
+          const { error } = await supabaseAdmin.from('user_profiles').upsert(
+            {
+              id: existing.id,
+              email,
+              full_name: name,
+              role: 'admin',
+              is_super_admin: false,
+              invited_by: caller.id,
               invited_at: new Date().toISOString(),
-              invite_expires_at: expiresAt.toISOString(),
-              invited_by: invitedBy,
-            })
-            .eq('id', existing.id);
-
+              status: 'active',
+            },
+            { onConflict: 'id' }
+          );
+          if (error) return NextResponse.json({ error: error.message }, { status: 500 });
           return NextResponse.json({
             success: true,
-            message: 'Invitation resent! The user has 24 hours to accept.'
+            message: 'This person already has an account; admin access granted. They can sign in with their existing password.',
           });
         }
 
-        // User exists in auth but no profile - create profile for them
-        const expiresAt = new Date(Date.now() + INVITE_EXPIRATION_HOURS * 60 * 60 * 1000);
-        const { error: profileError } = await supabaseAdmin
-          .from('user_profiles')
-          .insert({
-            id: existing.id,
-            email: email,
-            full_name: fullName || email.split('@')[0],
-            role: 'admin',
-            is_super_admin: false,
-            invited_by: invitedBy,
-            invited_at: new Date().toISOString(),
-            invite_expires_at: expiresAt.toISOString(),
-            status: existing.email_confirmed_at ? 'active' : 'pending',
-          });
-
-        if (profileError) {
-          return NextResponse.json({ error: profileError.message }, { status: 500 });
-        }
-
-        // Send magic link if not confirmed
-        if (!existing.email_confirmed_at) {
-          await supabaseAdmin.auth.admin.generateLink({
-            type: 'magiclink',
-            email: email,
-          });
-        }
-
-        return NextResponse.json({
-          success: true,
-          message: 'Profile created and invitation sent!'
+        // Never-confirmed user: delete and re-invite so a real email is sent.
+        const failed = await sendInvite(supabaseAdmin, {
+          email, fullName: name, invitedBy: caller.id, unconfirmedUserId: existing.id,
         });
+        if (failed) return failed;
+        return NextResponse.json({ success: true, message: 'Invitation email sent! The user has 24 hours to accept.' });
       }
 
-      // New user - create auth user with admin API (this doesn't trigger our INSERT trigger anymore)
-      // We use createUser which creates the user but doesn't auto-confirm
-      const expiresAt = new Date(Date.now() + INVITE_EXPIRATION_HOURS * 60 * 60 * 1000);
-
-      const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-        email: email,
-        email_confirm: false, // Don't auto-confirm, user must click magic link
-        user_metadata: {
-          full_name: fullName,
-          invited_by: invitedBy,
-        },
-      });
-
-      if (createError) {
-        return NextResponse.json({ error: createError.message }, { status: 500 });
-      }
-
-      if (!newUser?.user) {
-        return NextResponse.json({ error: 'Failed to create user' }, { status: 500 });
-      }
-
-      // Create profile for the new user
-      const { error: profileError } = await supabaseAdmin
-        .from('user_profiles')
-        .insert({
-          id: newUser.user.id,
-          email: email,
-          full_name: fullName || email.split('@')[0],
-          role: 'admin',
-          is_super_admin: false,
-          invited_by: invitedBy,
-          invited_at: new Date().toISOString(),
-          invite_expires_at: expiresAt.toISOString(),
-          status: 'pending',
-        });
-
-      if (profileError) {
-        // Try to delete the created auth user if profile fails
-        await supabaseAdmin.auth.admin.deleteUser(newUser.user.id);
-        return NextResponse.json({ error: profileError.message }, { status: 500 });
-      }
-
-      // Send magic link email
-      const { error: magicLinkError } = await supabaseAdmin.auth.admin.generateLink({
-        type: 'magiclink',
-        email: email,
-      });
-
-      if (magicLinkError) {
-        console.error('Magic link error:', magicLinkError);
-        // User created but email failed - still return success
-        return NextResponse.json({
-          success: true,
-          message: 'User created but email delivery failed. They can sign in directly.'
-        });
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: 'Invitation sent! The user has 24 hours to accept the invite.'
-      });
+      const failed = await sendInvite(supabaseAdmin, { email, fullName: name, invitedBy: caller.id });
+      if (failed) return failed;
+      return NextResponse.json({ success: true, message: 'Invitation email sent! The user has 24 hours to accept.' });
     }
 
     if (action === 'resendInvite') {
@@ -193,56 +159,41 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'User ID required' }, { status: 400 });
       }
 
-      // Get the user's email
       const { data: profile } = await supabaseAdmin
         .from('user_profiles')
-        .select('email, status')
+        .select('email, full_name, status')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
       if (!profile) {
         return NextResponse.json({ error: 'User not found' }, { status: 404 });
       }
-
       if (profile.status !== 'expired' && profile.status !== 'pending') {
         return NextResponse.json({ error: 'Can only resend to pending or expired invites' }, { status: 400 });
       }
 
-      // Send magic link
-      const { error: magicLinkError } = await supabaseAdmin.auth.admin.generateLink({
-        type: 'magiclink',
-        email: profile.email,
-      });
-
-      if (magicLinkError) {
-        return NextResponse.json({ error: magicLinkError.message }, { status: 500 });
+      const { data: authData } = await supabaseAdmin.auth.admin.getUserById(userId);
+      if (authData?.user?.email_confirmed_at) {
+        await supabaseAdmin.from('user_profiles').update({ status: 'active' }).eq('id', userId);
+        return NextResponse.json({ error: 'This user has already accepted the invitation' }, { status: 400 });
       }
 
-      // Update expiration
-      const expiresAt = new Date(Date.now() + INVITE_EXPIRATION_HOURS * 60 * 60 * 1000);
-      await supabaseAdmin
-        .from('user_profiles')
-        .update({
-          status: 'pending',
-          invited_at: new Date().toISOString(),
-          invite_expires_at: expiresAt.toISOString(),
-        })
-        .eq('id', userId);
-
-      return NextResponse.json({
-        success: true,
-        message: 'Invitation resent! The user has 24 hours to accept.'
+      const failed = await sendInvite(supabaseAdmin, {
+        email: String(profile.email).toLowerCase(),
+        fullName: profile.full_name || String(profile.email).split('@')[0],
+        invitedBy: caller.id,
+        unconfirmedUserId: authData?.user ? userId : undefined,
       });
+      if (failed) return failed;
+      return NextResponse.json({ success: true, message: 'Invitation email resent! The user has 24 hours to accept.' });
     }
 
     if (action === 'listAdminUsers') {
-      // Get all auth users to check confirmation status
-      const { data: authUsers, error: authError } = await supabaseAdmin.auth.admin.listUsers();
+      const { users: authUsers, error: authError } = await listAllAuthUsers(supabaseAdmin);
       if (authError) {
-        return NextResponse.json({ error: authError.message }, { status: 500 });
+        return NextResponse.json({ error: authError }, { status: 500 });
       }
 
-      // Get all profiles
       const { data: profiles, error: profilesError } = await supabaseAdmin
         .from('user_profiles')
         .select('id, email, full_name, role, is_super_admin, invited_by, invited_at, invite_expires_at, last_login, created_at, status')
@@ -252,21 +203,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: profilesError.message }, { status: 500 });
       }
 
-      // Combine data
       const enrichedUsers = profiles.map(profile => {
-        const authUser = authUsers?.users?.find(u => u.id === profile.id);
-
-        // Determine actual status
+        const authUser = authUsers.find(u => u.id === profile.id);
         let actualStatus = profile.status || 'pending';
 
-        // If email confirmed, mark as active
         if (authUser?.email_confirmed_at) {
           actualStatus = 'active';
-        }
-        // If pending and expired, mark as expired
-        else if (profile.status === 'pending' && profile.invite_expires_at) {
-          const expiresAtDate = new Date(profile.invite_expires_at);
-          if (expiresAtDate < new Date()) {
+        } else if (profile.status === 'pending' && profile.invite_expires_at) {
+          if (new Date(profile.invite_expires_at) < new Date()) {
             actualStatus = 'expired';
           }
         }
@@ -285,8 +229,18 @@ export async function POST(request: NextRequest) {
       if (!userId) {
         return NextResponse.json({ error: 'User ID required' }, { status: 400 });
       }
+      if (userId === caller.id) {
+        return NextResponse.json({ error: 'You cannot remove yourself' }, { status: 400 });
+      }
+      const { data: target } = await supabaseAdmin
+        .from('user_profiles')
+        .select('is_super_admin')
+        .eq('id', userId)
+        .maybeSingle();
+      if (target?.is_super_admin) {
+        return NextResponse.json({ error: 'A super admin cannot be removed' }, { status: 400 });
+      }
 
-      // Delete the profile
       const { error: deleteProfileError } = await supabaseAdmin
         .from('user_profiles')
         .delete()
@@ -296,16 +250,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: deleteProfileError.message }, { status: 500 });
       }
 
-      // Actually delete the auth user (not just ban)
       const { error: deleteAuthError } = await supabaseAdmin.auth.admin.deleteUser(userId);
 
       if (deleteAuthError) {
         console.error('Auth delete error:', deleteAuthError);
-        // Profile deleted but auth user remains - warn but don't fail
         return NextResponse.json({
-          success: true,
-          message: 'Profile deleted but auth user cleanup failed. User may still exist in auth system.'
-        });
+          error: 'Admin access was removed, but the auth account could not be deleted: ' + deleteAuthError.message,
+        }, { status: 500 });
       }
 
       return NextResponse.json({ success: true, message: 'Admin user completely removed' });

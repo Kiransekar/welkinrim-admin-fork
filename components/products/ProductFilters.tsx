@@ -1,45 +1,33 @@
 'use client';
 
-interface ProductFiltersProps {
-  activeCategory: string;
-  onCategoryChange: (category: Category) => void;
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
-  stats: {
-    all: number;
-    haemng: number;
-    maelard: number;
-    stroke: number;
-    vagans: number;
-    sciatic: number;
-    esc: number;
-    fc: number;
-    ips: number;
-    other: number;
-  };
+export interface FilterTab {
+  id: string;
+  label: string;
+  count: number;
 }
 
-type Category = 'all' | 'haemng' | 'maelard' | 'stroke' | 'vagans' | 'sciatic' | 'esc' | 'fc' | 'ips' | 'other';
+interface ProductFiltersProps {
+  activeCategory: string;
+  onCategoryChange: (category: string) => void;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
+  /** Tabs are built from the live series table; 'all' is added here. */
+  tabs: FilterTab[];
+  total: number;
+}
 
 export function ProductFilters({
   activeCategory,
   onCategoryChange,
   searchQuery,
   onSearchChange,
-  stats,
+  tabs,
+  total,
 }: ProductFiltersProps) {
-  const categories = [
-    { id: 'all', label: 'All', count: stats.all },
-    { id: 'haemng', label: 'Haemng', count: stats.haemng },
-    { id: 'maelard', label: 'Maelard', count: stats.maelard },
-    { id: 'stroke', label: 'Stroke', count: stats.stroke },
-    { id: 'vagans', label: 'Vagans', count: stats.vagans },
-    { id: 'sciatic', label: 'Sciatic', count: stats.sciatic },
-    { id: 'esc', label: 'ESCs', count: stats.esc },
-    { id: 'fc', label: 'Flight Controllers', count: stats.fc },
-    { id: 'ips', label: 'IPS', count: stats.ips },
-    { id: 'other', label: 'Other', count: stats.other },
-  ].filter(cat => cat.id === 'all' || cat.count > 0); // Only show tabs with products
+  const categories: FilterTab[] = [
+    { id: 'all', label: 'All', count: total },
+    ...tabs.filter(t => t.count > 0), // Only show tabs with products
+  ];
 
   return (
     <div className="product-filters">
@@ -48,7 +36,7 @@ export function ProductFilters({
           <button
             key={cat.id}
             className={`filter-tab ${activeCategory === cat.id ? 'active' : ''}`}
-            onClick={() => onCategoryChange(cat.id as Category)}
+            onClick={() => onCategoryChange(cat.id)}
           >
             <span className="filter-label">{cat.label}</span>
             <span className="filter-count">{cat.count}</span>

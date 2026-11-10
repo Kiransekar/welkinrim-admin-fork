@@ -1,6 +1,6 @@
 'use client';
 
-import { SupabaseProduct } from '@/lib/products';
+import { SupabaseProduct, getSegments, SEGMENT_OPTIONS } from '@/lib/products';
 import type { SpecItem } from '@/lib/products';
 
 interface ProductDetailModalProps {
@@ -44,6 +44,12 @@ export function ProductDetailModal({ product, onClose, onEdit }: ProductDetailMo
               <div className="detail-item">
                 <span className="detail-label">Category:</span>
                 <span className="detail-value badge">{product.category}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Segments:</span>
+                <span className="detail-value">
+                  {getSegments(product).map(id => SEGMENT_OPTIONS.find(o => o.id === id)?.label ?? id).join(', ')}
+                </span>
               </div>
               <div className="detail-item">
                 <span className="detail-label">Series:</span>

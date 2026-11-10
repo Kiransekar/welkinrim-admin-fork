@@ -30,7 +30,7 @@ export function useSeries() {
       const { data, error } = await supabase
         .from('series')
         .select('*')
-        .eq('is_deleted', false)
+        .or('is_deleted.is.null,is_deleted.eq.false')
         .order('id', { ascending: true });
 
       if (cancelled) return;
@@ -58,7 +58,7 @@ export function useSeries() {
     const { data, error } = await supabase
       .from('series')
       .select('*')
-      .eq('is_deleted', false)
+      .or('is_deleted.is.null,is_deleted.eq.false')
       .order('id', { ascending: true });
 
     if (error) {
@@ -81,16 +81,28 @@ export function useSeries() {
   }, [series]);
 
   const create = useCallback(async (newSeries: Series): Promise<boolean> => {
-    const { error } = await supabase.from('series').insert({
-      id: newSeries.id,
-      label: newSeries.label,
-      description: newSeries.description,
-      use_svg_logo: newSeries.use_svg_logo,
-      logo_src: newSeries.logo_src,
-      accent: newSeries.accent,
-      text_on_accent: newSeries.text_on_accent,
-      icon_url: newSeries.icon_url,
-    });
+    const id = (newSeries.id || '').trim();
+    const label = (newSeries.label || '').trim();
+    if (!id || !label) return false;
+
+    const row: Record<string, unknown> = {
+      id,
+      label,
+      use_svg_logo: !!newSeries.use_svg_logo,
+      logo_src: newSeries.logo_src || null,
+      accent: newSeries.accent || '#ffc812',
+      text_on_accent: newSeries.text_on_accent || '#000',
+      icon_url: newSeries.icon_url || null,
+      is_deleted: false,
+    };
+    if (newSeries.description) row.description = newSeries.description;
+
+    let { error } = await supabase.from('series').insert(row);
+    // The `description` column is optional in the schema; retry without it if it does not exist
+    if (error && 'description' in row && /description/i.test(error.message)) {
+      delete row.description;
+      ({ error } = await supabase.from('series').insert(row));
+    }
 
     if (error) {
       console.error('Error creating series', error);
@@ -102,10 +114,21 @@ export function useSeries() {
   }, [refresh]);
 
   const update = useCallback(async (id: string, updates: Partial<Series>): Promise<boolean> => {
-    const { error } = await supabase
-      .from('series')
-      .update(updates)
-      .eq('id', id);
+    // Only send editable columns (the form state also carries id/created_at/etc.)
+    const row: Record<string, unknown> = {};
+    if (updates.label !== undefined) row.label = updates.label;
+    if (updates.use_svg_logo !== undefined) row.use_svg_logo = updates.use_svg_logo;
+    if (updates.logo_src !== undefined) row.logo_src = updates.logo_src || null;
+    if (updates.accent !== undefined) row.accent = updates.accent;
+    if (updates.text_on_accent !== undefined) row.text_on_accent = updates.text_on_accent;
+    if (updates.icon_url !== undefined) row.icon_url = updates.icon_url || null;
+    if (updates.description !== undefined) row.description = updates.description;
+
+    let { error } = await supabase.from('series').update(row).eq('id', id);
+    if (error && 'description' in row && /description/i.test(error.message)) {
+      delete row.description;
+      ({ error } = await supabase.from('series').update(row).eq('id', id));
+    }
 
     if (error) {
       console.error('Error updating series', error);

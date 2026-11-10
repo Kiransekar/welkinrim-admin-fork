@@ -7,6 +7,7 @@ import type { Series } from '@/hooks/useSeries';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { uploadSeriesIcon } from '@/lib/imageUpload';
 
 export default function SeriesPage() {
   const { series, loading, create, update, remove, softDelete } = useSeries();
@@ -35,6 +36,27 @@ export default function SeriesPage() {
   // Calculate product count per series
   const getProductCount = (seriesId: string) => {
     return products.filter(p => p.series === seriesId).length;
+  };
+
+  const [uploadingIcon, setUploadingIcon] = useState(false);
+
+  const handleIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!formData.id) {
+      toast.error('Enter a Series ID before uploading an icon');
+      return;
+    }
+    setUploadingIcon(true);
+    const result = await uploadSeriesIcon(file, formData.id);
+    setUploadingIcon(false);
+    if (result.success && result.url) {
+      setFormData(prev => ({ ...prev, icon_url: result.url }));
+      toast.success('Icon uploaded');
+    } else {
+      toast.error(result.error || 'Icon upload failed');
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -370,7 +392,17 @@ export default function SeriesPage() {
                     onChange={(e) => setFormData({ ...formData, icon_url: e.target.value })}
                     placeholder="https://example.com/icon.png"
                   />
-                  <span className="form-hint">Optional icon image URL for the series header</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="input"
+                    style={{ marginTop: 8 }}
+                    disabled={uploadingIcon}
+                    onChange={handleIconUpload}
+                  />
+                  <span className="form-hint">
+                    {uploadingIcon ? 'Uploading icon...' : 'Paste an image URL or upload a file (max 1MB). Used as the series thumbnail on the site.'}
+                  </span>
                 </div>
               </div>
 
@@ -378,7 +410,7 @@ export default function SeriesPage() {
                 <button type="button" className="btn btn-secondary" onClick={() => setIsFormOpen(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-primary" disabled={isSaving}>
+                <button type="submit" className="btn btn-primary" disabled={isSaving || uploadingIcon}>
                   {isSaving ? 'Saving...' : editingSeries ? 'Update Series' : 'Create Series'}
                 </button>
               </div>
